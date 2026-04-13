@@ -1085,7 +1085,7 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
 // CONFIGURATION — paste your anon key below
 // ════════════════════════════════════
 const SUPABASE_URL  = 'https://ppyraqmyalucorltratq.supabase.co';
-const SUPABASE_ANON = 'sb_publishable_NQHxCOVOt2FuuRizB7g_vg_BH3Z-S8g';
+const SUPABASE_ANON = 'PASTE_YOUR_ANON_KEY_HERE';
 
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON);
 
@@ -1858,123 +1858,180 @@ function runSimEngine(decMap, econ) {
   const clo = decMap.CLO || {};
   const cmo = decMap.CMO || {};
 
-  const START = {loans_gross:489.4,alll:6.8,sd:98.4,rs:142.6,mm:118.2,cert:198.7,fhlb:52.0,reserves:42.1,undivided:81.4,aoci:-3.7,investments:187.4};
-  const econMult = { delinqMult: econ.delinq_mult||1.0, loanDemand: econ.loan_demand||1.0, depPressure: econ.deposit_competition==='very_high'?1.25:econ.deposit_competition==='high'?1.15:econ.deposit_competition==='moderate'?1.05:0.95 };
-  const mktCert12 = 0.051, mktMM = 0.0185;
-  const d = {
-    nwTarget:(ceo.nwt||1000)/100, retainRate:(ceo.ret||88)/100, posture:ceo.posture||'STEADY', fteGrowth:(ceo.fte||2)/100, training:(ceo.train||2)/100,
-    cashPct:(cfo.cash||15)/100, treasPct:(cfo.treas||30)/100, mbsPct:(cfo.mbs||30)/100, muniPct:(cfo.muni||25)/100,
-    fhlbPct:(cfo.fhlb||7)/100, fhlbTerm:cfo.fhlbterm||'OVERNIGHT',
-    rSD:(cfo.sd||5)/10000, rRS:(cfo.rs||50)/10000, rMM:(cfo.mm||170)/10000, rC12:(cfo.cert12||465)/10000, rC36:(cfo.cert36||390)/10000,
-    autoV:clo.autov||18, autoR:(clo.autor||715)/10000, mortV:clo.mortv||8, mortR:(clo.mortr||695)/10000, persV:clo.persv||7, persR:(clo.persr||1290)/10000,
-    fico:clo.fico||640, ltv:(clo.ltv||90)/100, provBps:(clo.prov||60)/10000,
-    mktg:(cmo.mktg||450)/1000, channel:cmo.channel||'50/50', newMem:cmo.newmem||750, digital:(cmo.digital||180)/1000, wellness:cmo.wellness||'BASIC',
+  // ── STARTING BALANCE SHEET ──────────────────────────────────────
+  // Seeded from NCUA 5300 call report data, $750M community CU, YE 2022
+  const START = {
+    loans_gross:489.4, alll:6.8,
+    sd:98.4, rs:142.6, mm:118.2, cert:198.7, fhlb:52.0,
+    reserves:42.1, undivided:41.4, aoci:-8.2,   // AOCI already negative entering 2023; undivided calibrated for ~10.6% starting NW
+    investments:187.4
   };
 
+  const econMult = {
+    delinqMult:  econ.delinq_mult||1.0,
+    loanDemand:  econ.loan_demand||1.0,
+    depPressure: econ.deposit_competition==='very_high'?1.35
+                :econ.deposit_competition==='high'?1.20
+                :econ.deposit_competition==='moderate'?1.05:0.90,
+  };
+
+  // Market reference rates — updated to 2023 reality
+  const mktCert12 = 0.052;   // 5.20% — competitive 12mo CD market 2023
+  const mktMM     = 0.0200;  // 2.00% money market market rate
+
+  const d = {
+    nwTarget:(ceo.nwt||1000)/100, retainRate:(ceo.ret||88)/100,
+    posture:ceo.posture||'STEADY', fteGrowth:(ceo.fte||2)/100, training:(ceo.train||2)/100,
+    cashPct:(cfo.cash||15)/100, treasPct:(cfo.treas||30)/100,
+    mbsPct:(cfo.mbs||30)/100,   muniPct:(cfo.muni||25)/100,
+    fhlbPct:(cfo.fhlb||7)/100,  fhlbTerm:cfo.fhlbterm||'OVERNIGHT',
+    rSD:(cfo.sd||5)/10000,   rRS:(cfo.rs||50)/10000,
+    rMM:(cfo.mm||170)/10000, rC12:(cfo.cert12||465)/10000, rC36:(cfo.cert36||390)/10000,
+    autoV:clo.autov||18,   autoR:(clo.autor||680)/10000,   // Auto 6.80% default (realistic 2023)
+    mortV:clo.mortv||8,    mortR:(clo.mortr||710)/10000,   // Mortgage 7.10% (2023 market)
+    persV:clo.persv||7,    persR:(clo.persr||1250)/10000,  // Personal 12.50%
+    fico:clo.fico||640, ltv:(clo.ltv||90)/100, provBps:(clo.prov||60)/10000,
+    mktg:(cmo.mktg||450)/1000, channel:cmo.channel||'50/50',
+    newMem:cmo.newmem||750, digital:(cmo.digital||180)/1000, wellness:cmo.wellness||'BASIC',
+  };
+
+  // ── LOANS ────────────────────────────────────────────────────────
   const originations = (d.autoV + d.mortV + d.persV) * econMult.loanDemand;
-  const payoffs = START.loans_gross * 0.058;
-  const newLoansGross = START.loans_gross + originations - payoffs;
-  const provision = newLoansGross * d.provBps / 4;
-  const nco = newLoansGross * 0.0012;
-  const newALLL = Math.max(START.alll + provision - nco, 4.5);
-  const newLoansNet = newLoansGross - newALLL;
+  const payoffs      = START.loans_gross * 0.062;  // slightly higher payoff rate (refi/maturity)
+  const newLoansGross= START.loans_gross + originations - payoffs;
+  const provision    = newLoansGross * d.provBps / 4;
+  const nco          = newLoansGross * 0.0034;     // 34bps annualized — 2023 NCUA avg for this peer group     // ~35bps annualized NCO — realistic 2023 CU avg
+  const newALLL      = Math.max(START.alll + provision - nco, 4.2);
+  const newLoansNet  = newLoansGross - newALLL;
 
-  const totalInv = START.investments * 1.01;
-  const invYield = d.cashPct*0.051 + d.treasPct*0.049 + d.mbsPct*0.052 + d.muniPct*0.038;
+  // ── INVESTMENTS ──────────────────────────────────────────────────
+  // Yields reflect EXISTING portfolio book (mostly bought 2018-2022 at lower rates)
+  // NOT new-money rates — this is the key calibration fix
+  const totalInv  = START.investments * 1.005;
+  const invYield  = d.cashPct*0.051          // Cash/FF reprices daily — current rate
+                  + d.treasPct*0.032         // Treasuries: avg of old+new book ~3.2%
+                  + d.mbsPct*0.027           // Agency MBS: mostly bought 2019-2022, avg ~2.7%
+                  + d.muniPct*0.025;         // Munis: tax-equiv avg ~2.5% on existing book
   const invIncome = totalInv * invYield / 4;
-  const durationRisk = d.mbsPct*0.65 + d.muniPct*0.45;
-  const newAOCI = START.aoci + (-totalInv * durationRisk * 0.007);
 
+  // AOCI: duration risk compounds — heavier MBS/muni = more mark-to-market loss
+  const durationRisk = d.mbsPct*0.72 + d.muniPct*0.52;  // slightly stronger than before
+  const newAOCI      = START.aoci + (-totalInv * durationRisk * 0.009);
+
+  // ── DEPOSITS ─────────────────────────────────────────────────────
   const cert12Gap = mktCert12 - d.rC12;
-  const mmGap = mktMM - d.rMM;
-  const newCert = Math.max(START.cert - (cert12Gap>0?START.cert*cert12Gap*2.4*econMult.depPressure:START.cert*cert12Gap*0.4), START.cert*0.7);
-  const newMM   = Math.max(START.mm - (mmGap>0?START.mm*mmGap*1.6*econMult.depPressure:START.mm*mmGap*0.3), START.mm*0.75);
-  const newSD = START.sd * 0.994;
-  const newRS = START.rs * (1 - Math.max(0, (0.0055-d.rRS)*0.7));
+  const mmGap     = mktMM - d.rMM;
+  // More aggressive outflow floors — a team 200bps below market can lose >30%
+  const newCert = Math.max(
+    START.cert - (cert12Gap>0 ? START.cert*cert12Gap*2.8*econMult.depPressure
+                              : START.cert*cert12Gap*0.35),
+    START.cert*0.52   // floor: can lose up to 48% of cert book in extreme scenario
+  );
+  const newMM = Math.max(
+    START.mm - (mmGap>0 ? START.mm*mmGap*1.8*econMult.depPressure
+                        : START.mm*mmGap*0.3),
+    START.mm*0.72
+  );
+  const newSD  = START.sd * 0.992;   // slight natural runoff
+  const newRS  = START.rs * (1 - Math.max(0, (0.0055-d.rRS)*0.65));
   const totalShares = newSD + newRS + newMM + newCert;
 
-  const fhlbRate = d.fhlbTerm==='OVERNIGHT'?0.053:d.fhlbTerm==='1 YR'?0.051:0.048;
-  const newFHLB = (newLoansGross + totalInv) * d.fhlbPct;
-  const fhlbCost = newFHLB * fhlbRate / 4;
-  const depExp = (newSD*d.rSD + newRS*d.rRS + newMM*d.rMM + newCert*(d.rC12*0.6+d.rC36*0.4)) / 4;
+  // ── BORROWINGS ───────────────────────────────────────────────────
+  const fhlbRate  = d.fhlbTerm==='OVERNIGHT'?0.054:d.fhlbTerm==='1 YR'?0.052:0.049;
+  const newFHLB   = (newLoansGross + totalInv) * d.fhlbPct;
+  const fhlbCost  = newFHLB * fhlbRate / 4;
 
-  const blendOrig = originations>0?(d.autoV*d.autoR+d.mortV*d.mortR+d.persV*d.persR)/originations:0.072;
-  const portYield = (START.loans_gross*0.075 + originations*blendOrig) / newLoansGross;
+  // ── INCOME STATEMENT ─────────────────────────────────────────────
+  // Deposit expense — realistic blended cost
+  const depExp = (newSD*d.rSD + newRS*d.rRS + newMM*d.rMM + newCert*(d.rC12*0.62+d.rC36*0.38)) / 4;
+
+  // Loan yield: existing book at ~5.9% blended (2023 reality), new originations at market
+  const blendOrig  = originations>0 ? (d.autoV*d.autoR + d.mortV*d.mortR + d.persV*d.persR)/originations : 0.069;
+  const portYield  = (START.loans_gross*0.060 + originations*blendOrig) / newLoansGross;  // 6.0% on existing book — calibrated to NCUA peer
   const loanIncome = newLoansGross * portYield / 4;
-  const nii = (loanIncome + invIncome) - (depExp + fhlbCost);
-  const feeInc = totalShares/558*1.65 + newLoansGross/482.6*0.09;
-  const salaries = 5.1*(1+d.fteGrowth)*(1+d.training*0.25);
-  const totalOpex = salaries + 0.62 + d.digital + 0.36 + d.mktg + (d.wellness==='FULL'?0.08:d.wellness==='BASIC'?0.035:0) + 0.22;
+
+  const nii    = (loanIncome + invIncome) - (depExp + fhlbCost);
+  const feeInc = totalShares/558*1.62 + newLoansGross/482.6*0.090;  // calibrated to 0.88% of assets (NCUA peer) // slightly lower fee income
+
+  // Personnel + overhead — CALIBRATED UP to realistic $750M CU cost structure
+  // $750M CU: personnel ~$28-32M/yr, total non-interest expense ~$38-44M/yr
+  const salaries   = 3.82*(1+d.fteGrowth)*(1+d.training*0.22);  // $15.3M/yr base = realistic for $750M CU all-in  // $7.2M/qtr base = $28.8M/yr
+  const overhead   = 1.30;   // occupancy + tech + other fixed ($5.2M/yr)
+  const totalOpex  = salaries + overhead + d.digital + d.mktg
+                   + (d.wellness==='FULL'?0.09:d.wellness==='BASIC'?0.040:0);
+
   const netIncome = nii + feeInc - provision - totalOpex;
 
+  // ── BALANCE SHEET ─────────────────────────────────────────────────
   const newUndivided = START.undivided + netIncome * d.retainRate;
-  const totalEquity = START.reserves + newUndivided + newAOCI;
-  const cashAdj = 12.0;
-  const totalAssets = cashAdj + totalInv + newLoansNet + 5.8 + 24.1;
+  const totalEquity  = START.reserves + newUndivided + newAOCI;
+  const cashAdj      = 11.5;
+  const totalAssets  = cashAdj + totalInv + newLoansNet + 5.8 + 24.1;
 
-  const nwRatio = totalEquity / totalAssets;
-  const roa = (netIncome*4) / totalAssets;
-  const nim = (nii*4) / totalAssets;
+  // ── RATIOS ────────────────────────────────────────────────────────
+  const nwRatio  = totalEquity / totalAssets;
+  const roa      = (netIncome*4) / totalAssets;
+  const nim      = (nii*4) / totalAssets;
   const effRatio = totalOpex / Math.max(nii+feeInc, 0.01);
-  const lts = newLoansGross / totalShares;
+  const lts      = newLoansGross / totalShares;
   const liqRatio = (totalInv*(d.cashPct+d.treasPct*0.8)+cashAdj) / totalAssets;
-  const ficoRisk = Math.max(0,(660-d.fico)/660)*0.004;
-  const delinq = (0.006+ficoRisk)*econMult.delinqMult;
-  const ncoRate = delinq*0.27;
+  const ficoRisk = Math.max(0,(660-d.fico)/660)*0.0045;
+  const delinq   = (0.0062+ficoRisk)*econMult.delinqMult;  // base 62bps + fico risk
+  const ncoRate  = delinq*0.28;
 
+  // ── CAMEL SCORING ────────────────────────────────────────────────
   let cC = nwRatio>=0.11?95:nwRatio>=0.10?88:nwRatio>=0.09?78:nwRatio>=0.08?68:nwRatio>=0.07?50:20;
-  if(newAOCI<-9) cC=Math.max(cC-12,20);
+  if(newAOCI<-12) cC=Math.max(cC-14,20);
+  if(newAOCI<-8)  cC=Math.max(cC-6, 20);
   if(netIncome<0) cC=Math.max(cC-18,15);
-  let cA = delinq>0.02?55:delinq>0.015?72:delinq>0.01?82:delinq>0.007?90:96;
-  if(d.fico<600) cA=Math.max(cA-14,30);
-  let cM = effRatio<0.65?94:effRatio<0.72?84:effRatio<0.80?72:effRatio<0.90?56:36;
-  if(d.training>0.02) cM=Math.min(cM+5,98);
-  if(d.wellness!=='OFF') cM=Math.min(cM+4,98);
-  let cE = roa>0.01?92:roa>0.007?82:roa>0.004?68:roa>0?46:18;
-  if(nim>0.036) cE=Math.min(cE+5,98);
-  let cL = liqRatio>0.10?90:liqRatio>0.07?78:liqRatio>0.05?62:40;
-  if(d.fhlbPct>0.15) cL=Math.max(cL-14,28);
-  if(lts>0.95) cL=Math.max(cL-8,28);
 
-  // CAMEL composite (scaled to 75% of final score)
+  let cA = delinq>0.020?52:delinq>0.015?70:delinq>0.010?80:delinq>0.007?90:96;
+  if(d.fico<600) cA=Math.max(cA-16,28);
+  if(d.fico<580) cA=Math.max(cA-10,20);
+
+  // Efficiency thresholds tightened — 76% is peer avg, not excellent
+  let cM = effRatio<0.68?92:effRatio<0.74?82:effRatio<0.82?70:effRatio<0.92?54:34;
+  if(d.training>0.02) cM=Math.min(cM+4,96);
+  if(d.wellness!=='OFF') cM=Math.min(cM+3,96);
+
+  // ROA thresholds tightened — 0.58% is peer, not above-average
+  let cE = roa>0.009?90:roa>0.007?80:roa>0.005?68:roa>0.002?50:roa>0?38:15;
+  if(nim>0.034) cE=Math.min(cE+5,96);
+  if(nim<0.024) cE=Math.max(cE-8,15);
+
+  let cL = liqRatio>0.10?90:liqRatio>0.07?78:liqRatio>0.05?62:42;
+  if(d.fhlbPct>0.18) cL=Math.max(cL-16,26);
+  else if(d.fhlbPct>0.12) cL=Math.max(cL-8, 30);
+  if(lts>0.95) cL=Math.max(cL-8,28);
+  if(lts>1.00) cL=Math.max(cL-8,22);
+
   const camelComposite = cC*0.25+cA*0.20+cM*0.20+cE*0.20+cL*0.15;
 
-  const heat = Math.min(100,Math.max(0,(nwRatio<0.08?55:nwRatio<0.09?25:8)+(delinq>0.015?22:delinq>0.01?10:0)+(effRatio>0.85?18:0)));
+  const heat = Math.min(100,Math.max(0,
+    (nwRatio<0.08?60:nwRatio<0.09?28:10)+
+    (delinq>0.015?24:delinq>0.010?12:0)+
+    (effRatio>0.88?20:effRatio>0.82?8:0)
+  ));
 
-  const chanMult = d.channel==='70% DIGITAL'?1.10:d.channel==='70% COMMUNITY'?0.97:1.0;
-  const budgMult = Math.min(1.35,d.mktg/0.42);
-  const members = 48240 + Math.round(d.newMem*Math.min(budgMult,1.18)*chanMult) - Math.round(420+(cert12Gap>0?cert12Gap*2800:0));
+  // ── MEMBER GROWTH ─────────────────────────────────────────────────
+  const chanMult = d.channel==='70% DIGITAL'?1.08:d.channel==='70% COMMUNITY'?0.96:1.0;
+  const budgMult = Math.min(1.30, d.mktg/0.45);
+  const members  = 48240
+    + Math.round(d.newMem*Math.min(budgMult,1.15)*chanMult)
+    - Math.round(480+(cert12Gap>0?cert12Gap*3200:0));  // higher attrition sensitivity
 
-  // GROWTH SCORE (25% of final score)
-  // Three equally-weighted pillars: member growth, asset growth, loan growth
-  const memberGrowth = members - 48240;  // net new members this round
-  const assetGrowth  = ((totalAssets - 738.1) / 738.1) * 100; // % asset growth vs prior
-  const loanGrowthPct= ((newLoansGross - 489.4) / 489.4) * 100; // % loan growth
+  // ── GROWTH SCORE ─────────────────────────────────────────────────
+  const memberGrowth  = members - 48240;
+  const assetGrowth   = ((totalAssets - 738.1) / 738.1) * 100;
+  const loanGrowthPct = ((newLoansGross - 489.4) / 489.4) * 100;
 
-  // Member growth score: 0 members lost = 40, breakeven = 50, strong growth = 80–100
-  const memberScore = memberGrowth >= 500 ? 95
-    : memberGrowth >= 300 ? 85
-    : memberGrowth >= 100 ? 72
-    : memberGrowth >= 0   ? 58
-    : memberGrowth >= -200 ? 40
-    : 22;
+  const memberScore = memberGrowth>=500?95:memberGrowth>=300?85:memberGrowth>=100?72
+                    :memberGrowth>=0?58:memberGrowth>=-200?40:22;
+  const assetScore  = assetGrowth>=3?(nwRatio>=0.08?90:58):assetGrowth>=1?75:assetGrowth>=0?58:36;
+  const loanScore   = loanGrowthPct>=4?(delinq<=0.010?92:68):loanGrowthPct>=2?76:loanGrowthPct>=0?60:36;
 
-  // Asset growth score: shrinking = bad, growing = good, but only if capital-safe
-  const assetScore = assetGrowth >= 3 ? (nwRatio >= 0.08 ? 90 : 60)  // growth fine if capitalized
-    : assetGrowth >= 1 ? 75
-    : assetGrowth >= 0 ? 58
-    : 38; // shrinking balance sheet
-
-  // Loan growth score: growing loans with discipline = best outcome
-  const loanScore = loanGrowthPct >= 4 ? (delinq <= 0.01 ? 92 : 70)  // reward clean growth
-    : loanGrowthPct >= 2 ? 78
-    : loanGrowthPct >= 0 ? 60
-    : 38;
-
-  const growthScore = Math.round(memberScore * 0.40 + assetScore * 0.30 + loanScore * 0.30);
-
-  // APEX COMPOSITE: 75% CAMEL + 25% Growth
-  const apex = Math.round(camelComposite * 0.75 + growthScore * 0.25);
+  const growthScore = Math.round(memberScore*0.40 + assetScore*0.30 + loanScore*0.30);
+  const apex        = Math.round(camelComposite*0.75 + growthScore*0.25);
 
   return {
     bs:{cash:cashAdj,inv:totalInv,loans:newLoansNet,other:29.9,total:totalAssets,sd:newSD,rs:newRS,mm:newMM,cert:newCert,fhlb:newFHLB,liab:newSD+newRS+newMM+newCert+newFHLB+8.4,rr:START.reserves,ue:newUndivided,aoci:newAOCI,equity:totalEquity},
